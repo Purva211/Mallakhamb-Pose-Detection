@@ -1,10 +1,20 @@
 import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import cv2
 import numpy as np
 import joblib
+import mediapipe as mp
 from sklearn.ensemble import RandomForestClassifier
 
+
+
 from utils.pose_detector import extract_landmarks
+
+
+mp_pose = mp.solutions.pose
 
 dataset_path = "../dataset"
 
@@ -24,7 +34,6 @@ for pose in os.listdir(dataset_path):
         landmarks = extract_landmarks(image)
 
         if landmarks is not None:
-
             data.append(landmarks)
             labels.append(pose)
 
