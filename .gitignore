@@ -1,0 +1,23 @@
+# Ignore large datasets (Not needed for deployment)
+Raw_Dataset/
+Processed_Dataset/
+dataset/*
+!dataset/ideal_poses.json
+yolo_dataset/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+.env/
+*.env
+
+# Ignore large archives
+*.zip
+*.tar.gz
+*.rar
+
+# Ignore Jupyter notebooks if any
+*.ipynb
