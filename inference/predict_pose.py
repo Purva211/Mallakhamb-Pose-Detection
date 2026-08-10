@@ -137,8 +137,11 @@ def normalize_landmarks(pose_landmarks):
 
 def detect_pole(image_bgr, pose_landmarks=None):
     """
-    Detects whether a vertical Mallakhamb pole or rope structure is present in the image.
-    Uses Canny edge detection and Probabilistic Hough Line Transform.
+    Enhanced Pole Detection Algorithm (Option A):
+    1. Human Body Masking: Excludes edges from human limbs (legs/arms) using MediaPipe skeleton connections so Kathak/dance legs aren't misidentified as poles.
+    2. HSV Wood & Rope Color Validation: Checks if edge regions exhibit wooden/brownish/tan or rope color signatures.
+    3. Multi-Segment Vertical Axis Accumulation: Allows detection of partially occluded poles (when athlete's body blocks parts of the pole).
+    4. Parallel Edge Pair Verification: Verifies dual parallel vertical boundaries of cylindrical poles.
     """
     if image_bgr is None or image_bgr.size == 0:
         return False
@@ -146,15 +149,41 @@ def detect_pole(image_bgr, pose_landmarks=None):
     h, w = image_bgr.shape[:2]
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(blurred, 50, 150)
+    edges = cv2.Canny(blurred, 40, 140)
 
-    min_line_len = int(h * 0.25)
-    lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=70, minLineLength=min_line_len, maxLineGap=30)
+    # 1. Mask out human body edges using MediaPipe landmarks if available
+    if pose_landmarks:
+        body_mask = np.ones((h, w), dtype=np.uint8) * 255
+        limb_thickness = int(max(18, min(w, h) * 0.05))  # Mask thickness proportional to image
+        
+        coords = []
+        for lm in pose_landmarks:
+            cx, cy = int(lm.x * w), int(lm.y * h)
+            coords.append((cx, cy))
+            
+        for start_idx, end_idx in POSE_CONNECTIONS:
+            if start_idx < len(coords) and end_idx < len(coords):
+                p1, p2 = coords[start_idx], coords[end_idx]
+                cv2.line(body_mask, p1, p2, 0, limb_thickness)
+                
+        # Also mask out head/face bounding region
+        if len(coords) > 0:
+            nose = coords[0]
+            head_radius = int(max(25, min(w, h) * 0.08))
+            cv2.circle(body_mask, nose, head_radius, 0, -1)
+
+        # Apply body mask to edge map
+        edges = cv2.bitwise_and(edges, edges, mask=body_mask)
+
+    # 2. Lower min line length to handle pole occlusion by athlete body
+    min_line_len = int(h * 0.12)  # Reduced from 0.25 to 0.12 to detect pole segments broken by athlete body
+    lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=45, minLineLength=min_line_len, maxLineGap=40)
 
     if lines is None:
         return False
 
-    vertical_lines_count = 0
+    # Extract vertical line candidates
+    vertical_segments = []
     for line in lines:
         x1, y1, x2, y2 = line.flatten()[:4]
         dx = abs(x2 - x1)
@@ -165,17 +194,90 @@ def detect_pole(image_bgr, pose_landmarks=None):
         slope_ratio = dx / float(dy)
         line_len = math.sqrt(dx*dx + dy*dy)
 
-        if slope_ratio < 0.36 and line_len >= min_line_len:
+        # Steep angle check (slope ratio < 0.32 means within ~18 degrees of vertical)
+        if slope_ratio < 0.32 and line_len >= min_line_len:
+            avg_x = (x1 + x2) / 2.0
+            
+            # If pose landmarks present, require pole to be within athlete reach (within 45% of image width)
             if pose_landmarks:
                 xs = [lm.x * w for lm in pose_landmarks]
                 person_center_x = sum(xs) / len(xs)
-                line_avg_x = (x1 + x2) / 2.0
-                if abs(line_avg_x - person_center_x) < (w * 0.40):
-                    vertical_lines_count += 1
-            else:
-                vertical_lines_count += 1
+                if abs(avg_x - person_center_x) > (w * 0.45):
+                    continue
+                    
+            vertical_segments.append({
+                'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+                'avg_x': avg_x, 'len': line_len,
+                'min_y': min(y1, y2), 'max_y': max(y1, y2)
+            })
 
-    return vertical_lines_count >= 1
+    if not vertical_segments:
+        return False
+
+    # Group vertical segments by X axis alignment (clustering lines along the same vertical column)
+    axis_clusters = []
+    x_tolerance = w * 0.04  # Lines within 4% of image width belong to the same pole axis
+    
+    for seg in vertical_segments:
+        matched = False
+        for cluster in axis_clusters:
+            cluster_avg_x = sum(s['avg_x'] for s in cluster) / len(cluster)
+            if abs(seg['avg_x'] - cluster_avg_x) < x_tolerance:
+                cluster.append(seg)
+                matched = True
+                break
+        if not matched:
+            axis_clusters.append([seg])
+
+    # Evaluate clusters: A valid pole has total vertical coverage or parallel edge pairs
+    hsv_img = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    
+    for cluster in axis_clusters:
+        # Calculate combined vertical span of this cluster
+        min_y = min(s['min_y'] for s in cluster)
+        max_y = max(s['max_y'] for s in cluster)
+        total_span = max_y - min_y
+        total_line_len = sum(s['len'] for s in cluster)
+        
+        # Check if total line coverage is at least 20% of image height
+        if total_span >= (h * 0.20) or total_line_len >= (h * 0.20):
+            # HSV Wood / Tan Color Check around the detected axis
+            cluster_x = int(sum(s['avg_x'] for s in cluster) / len(cluster))
+            crop_x1 = max(0, cluster_x - int(w * 0.03))
+            crop_x2 = min(w, cluster_x + int(w * 0.03))
+            crop_y1 = max(0, min_y)
+            crop_y2 = min(h, max_y)
+            
+            if crop_x2 > crop_x1 and crop_y2 > crop_y1:
+                hsv_roi = hsv_img[crop_y1:crop_y2, crop_x1:crop_x2]
+                
+                # Wood/tan/brown/rope HSV ranges:
+                # Brown/Wood: Hue 4-35, Sat 15-220, Val 30-240
+                # Off-white/Rope: Sat < 50, Val > 100
+                h_ch, s_ch, v_ch = hsv_roi[:, :, 0], hsv_roi[:, :, 1], hsv_roi[:, :, 2]
+                
+                wood_mask = ((h_ch >= 4) & (h_ch <= 35) & (s_ch >= 15) & (v_ch >= 30)) | \
+                            ((s_ch <= 50) & (v_ch >= 100))  # Rope / pale wood
+                
+                match_ratio = np.mean(wood_mask)
+                
+                # If color matches wooden pole/rope characteristics (> 30% of ROI pixels)
+                if match_ratio >= 0.30:
+                    return True
+            else:
+                return True
+
+    # Check if any two distinct clusters form parallel edges of a pole (separated by pole width)
+    if len(axis_clusters) >= 2:
+        cluster_xs = [sum(s['avg_x'] for s in c) / len(c) for c in axis_clusters]
+        for i in range(len(cluster_xs)):
+            for j in range(i + 1, len(cluster_xs)):
+                dist = abs(cluster_xs[i] - cluster_xs[j])
+                # Pole width is typically 1.5% to 12% of image width
+                if (w * 0.015) <= dist <= (w * 0.12):
+                    return True
+
+    return False
 
 def calculate_accuracy(user_angles, ideal_angles):
     """ Honest accuracy scoring formula based on joint angle error """
@@ -222,6 +324,16 @@ def generate_feedback(user_angles, ideal_angles, threshold=25):
                 feedback.append(f"Straighten your {joint} for optimal form.")
     return feedback if feedback else ["Perfect pose alignment! Excellent posture."]
 
+def compute_cosine_similarity(v1, v2):
+    v1 = np.array(v1)
+    v2 = np.array(v2)
+    dot = np.dot(v1, v2)
+    norm1 = np.linalg.norm(v1)
+    norm2 = np.linalg.norm(v2)
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+    return float(dot / (norm1 * norm2))
+
 def draw_skeleton(image_rgb, pose_landmarks):
     h, w, _ = image_rgb.shape
     coords = []
@@ -241,86 +353,33 @@ def draw_skeleton(image_rgb, pose_landmarks):
 def process_image_array(image_bgr, model, encoder, ideal_poses, fast_mode=False):
     detector = get_pose_detector()
     
-    if fast_mode:
-        rotations = [(None, "0 degrees")]
-    else:
-        rotations = [
-            (None, "0 degrees"),
-            (cv2.ROTATE_90_CLOCKWISE, "90 deg CW"),
-            (cv2.ROTATE_180, "180 deg"),
-            (cv2.ROTATE_90_COUNTERCLOCKWISE, "90 deg CCW")
-        ]
+    # Process image directly in original orientation
+    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
     
-    best_result = None
-    best_candidate_score = -10.0
+    detection_result = detector.detect(mp_image)
     
-    for rot_code, rot_name in rotations:
-        if rot_code is not None:
-            rotated_bgr = cv2.rotate(image_bgr, rot_code)
-        else:
-            rotated_bgr = image_bgr.copy()
-            
-        image_rgb = cv2.cvtColor(rotated_bgr, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+    if not detection_result.pose_landmarks or len(detection_result.pose_landmarks) == 0:
+        return {"error": "No human body detected in image. Ensure athlete's full body is visible.", "image": image_rgb}
         
-        detection_result = detector.detect(mp_image)
-        
-        if not detection_result.pose_landmarks or len(detection_result.pose_landmarks) == 0:
-            continue
-            
-        pose_landmarks = detection_result.pose_landmarks[0]
-        features = normalize_landmarks(pose_landmarks)
-        probabilities = model.predict_proba([features])[0]
-        max_prob_index = np.argmax(probabilities)
-        confidence = probabilities[max_prob_index]
-        
-        # Calculate upright alignment score
-        lms = pose_landmarks
-        nose_y = lms[0].y
-        shoulder_y = (lms[11].y + lms[12].y) / 2.0
-        hip_y = (lms[23].y + lms[24].y) / 2.0
-        
-        upright_bonus = 0.0
-        if (hip_y - shoulder_y) > 0.05:
-            upright_bonus += 0.20
-        if (shoulder_y - nose_y) > 0.02:
-            upright_bonus += 0.10
-            
-        candidate_score = confidence + upright_bonus
-        
-        if candidate_score > best_candidate_score:
-            best_candidate_score = candidate_score
-            best_result = (pose_landmarks, rotated_bgr, image_rgb, max_prob_index, features, rot_code, confidence)
-            
-    if best_result is None:
-        return {"error": "No human body detected in frame. Ensure full body is visible.", "image": cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)}
-        
-    pose_landmarks, best_rotated_bgr, image_rgb, max_prob_index, features, rot_code, raw_confidence = best_result
+    pose_landmarks = detection_result.pose_landmarks[0]
+    features = normalize_landmarks(pose_landmarks)
+    probabilities = model.predict_proba([features])[0]
+    max_prob_index = np.argmax(probabilities)
+    raw_confidence = float(probabilities[max_prob_index])
     
-    if not fast_mode and yolo_model is not None:
-        zoomed_bgr = auto_zoom_person(best_rotated_bgr)
-        image_rgb = cv2.cvtColor(zoomed_bgr, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
-        detection_result = detector.detect(mp_image)
-        if detection_result.pose_landmarks and len(detection_result.pose_landmarks) > 0:
-            pose_landmarks = detection_result.pose_landmarks[0]
-            features = normalize_landmarks(pose_landmarks)
-            probabilities = model.predict_proba([features])[0]
-            max_prob_index = np.argmax(probabilities)
-            raw_confidence = probabilities[max_prob_index]
-    
+    # Draw skeleton overlay
     draw_skeleton(image_rgb, pose_landmarks)
-    pole_detected = detect_pole(best_rotated_bgr, pose_landmarks)
+    pole_detected = detect_pole(image_bgr, pose_landmarks)
     
     raw_class_name = encoder.classes_[max_prob_index]
     display_pose_name = POSE_NAME_MAP.get(raw_class_name, raw_class_name.replace("_", " "))
     user_angles = extract_angles(features)
     
-    # Strictly evaluate classification confidence & pole presence
-    CONFIDENCE_THRESHOLD = 0.52
+    # Rejection threshold for non-human / completely garbage poses
+    CONFIDENCE_THRESHOLD = 0.25
     
-    # If raw confidence is low OR if no pole is detected and confidence < 0.65 (e.g. dancer photo)
-    if raw_confidence < CONFIDENCE_THRESHOLD or (not pole_detected and raw_confidence < 0.65):
+    if raw_confidence < CONFIDENCE_THRESHOLD:
         return {
             "unrecognized": True,
             "pose": "Unrecognized / Non-Mallakhamb Pose",
@@ -343,16 +402,21 @@ def process_image_array(image_bgr, model, encoder, ideal_poses, fast_mode=False)
             best_accuracy = -1
             best_ideal_angles = None
             for ideal_feat in ideal_features:
+                cos_sim = compute_cosine_similarity(features, ideal_feat)
                 ideal_angles = extract_angles(ideal_feat)
-                acc = calculate_accuracy(user_angles, ideal_angles)
-                if acc > best_accuracy:
-                    best_accuracy = acc
+                angle_acc = calculate_accuracy(user_angles, ideal_angles)
+                combined = (cos_sim * 60.0) + (angle_acc * 0.40)
+                if combined > best_accuracy:
+                    best_accuracy = combined
                     best_ideal_angles = ideal_angles
             ideal_angles = best_ideal_angles
-            accuracy_score = round(best_accuracy, 1)
+            accuracy_score = round(min(98.5, max(45.0, best_accuracy)), 1)
         else:
+            cos_sim = compute_cosine_similarity(features, ideal_features)
             ideal_angles = extract_angles(ideal_features)
-            accuracy_score = round(calculate_accuracy(user_angles, ideal_angles), 1)
+            angle_acc = calculate_accuracy(user_angles, ideal_angles)
+            combined = (cos_sim * 60.0) + (angle_acc * 0.40)
+            accuracy_score = round(min(98.5, max(45.0, combined)), 1)
             
         grade = get_grade(accuracy_score)
         feedback_list = generate_feedback(user_angles, ideal_angles, threshold=25)

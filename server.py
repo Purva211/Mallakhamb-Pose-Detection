@@ -457,6 +457,14 @@ def get_poses():
     
     for idx, name in enumerate(classes):
         clean_name = POSE_NAME_MAP.get(name, name.replace("_", " "))
+        img_filename = name.lower().strip().replace(" ", "_").replace("-", "_") + ".jpg"
+        pos_map = {
+            2: "center 80%",
+            9: "center 80%",
+            12: "center 75%",
+            15: "center 85%",
+            19: "center 75%"
+        }
         pose_list.append({
             "id": idx + 1,
             "name": name,
@@ -464,6 +472,8 @@ def get_poses():
             "category": "Pole Mallakhamb",
             "difficulty": "Advanced" if idx % 2 == 0 else "Intermediate",
             "description": pose_descriptions.get(name, f"Standard Mallakhamb posture {clean_name}."),
+            "image": f"/images/poses/{img_filename}",
+            "objectPosition": pos_map.get(idx + 1, "center 40%"),
             "targetAngles": {
                 "Elbows": "160°-180°",
                 "Shoulders": "140°-160°",

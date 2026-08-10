@@ -1,9 +1,11 @@
 # Ignore large datasets (Not needed for deployment)
 Raw_Dataset/
+row_dataset/
 Processed_Dataset/
 dataset/*
 !dataset/ideal_poses.json
 yolo_dataset/
+temp_videos/
 
 # Python caches
 __pycache__/

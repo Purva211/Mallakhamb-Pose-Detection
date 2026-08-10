@@ -13,6 +13,20 @@ const difficultyClass = (d) => {
   return 'difficulty-advanced';
 };
 
+const getPoseObjectPosition = (pose) => {
+  if (pose.objectPosition) return pose.objectPosition;
+  const id = pose.id;
+  const name = (pose.name || '').toLowerCase();
+  
+  if (id === 2 || name.includes('bagali')) return 'center 80%';
+  if (id === 9 || name.includes('hatacha_phara')) return 'center 80%';
+  if (id === 12 || name.includes('natarajasan1')) return 'center 75%';
+  if (id === 15 || name.includes('padmasan_from_hatach_fara')) return 'center 85%';
+  if (id === 19 || name.includes('straddlel')) return 'center 75%';
+  
+  return 'center 40%';
+};
+
 const PoseLibrary = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filter, setFilter] = useState('All');
@@ -32,6 +46,7 @@ const PoseLibrary = () => {
             return {
               ...p,
               image: fallback?.image || fallbackPoses[idx % fallbackPoses.length].image,
+              objectPosition: fallback?.objectPosition || p.objectPosition,
               landmarks: p.landmarks || 33,
               accuracy: p.accuracy || 95
             };
@@ -119,12 +134,16 @@ const PoseLibrary = () => {
                       style={{ cursor: 'pointer', padding: 0 }}
                       onClick={() => setSelectedPose(pose)}
                     >
-                      <div className="position-relative overflow-hidden">
+                      <div className="position-relative overflow-hidden" style={{ height: 240, background: '#070a12' }}>
                         <img
-                          src={pose.image}
+                          src={pose.image || '/images/mallakhamb_action.png'}
                           alt={pose.title || pose.name}
-                          className="w-100"
-                          style={{ height: 200, objectFit: 'cover', transition: 'transform 0.3s ease' }}
+                          className="w-100 h-100"
+                          style={{ objectFit: 'cover', objectPosition: getPoseObjectPosition(pose), transition: 'transform 0.3s ease' }}
+                          onError={(e) => {
+                            e.target.onerror = null;
+                            e.target.src = '/images/mallakhamb_action.png';
+                          }}
                         />
                         <div
                           className="position-absolute bottom-0 start-0 end-0 p-3"
@@ -164,12 +183,16 @@ const PoseLibrary = () => {
                 </Modal.Header>
                 <Modal.Body className="p-0">
                   <Row className="g-0">
-                    <Col md={6}>
+                    <Col md={6} style={{ background: 'radial-gradient(circle at center, rgba(15, 23, 42, 0.95), rgba(7, 10, 18, 0.98))', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '12px' }}>
                       <img
-                        src={selectedPose.image}
+                        src={selectedPose.image || '/images/mallakhamb_action.png'}
                         alt={selectedPose.title || selectedPose.name}
                         className="img-fluid w-100 h-100"
-                        style={{ objectFit: 'cover', minHeight: 280 }}
+                        style={{ objectFit: 'contain', maxHeight: 380, minHeight: 280 }}
+                        onError={(e) => {
+                          e.target.onerror = null;
+                          e.target.src = '/images/mallakhamb_action.png';
+                        }}
                       />
                     </Col>
                     <Col md={6} className="p-4 d-flex flex-column justify-content-center">

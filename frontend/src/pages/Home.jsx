@@ -88,12 +88,16 @@ const Home = () => {
                 transition={{ duration: 0.5, delay: 0.15 }}
                 className="hero-image-wrapper text-center"
               >
-                <div className="hero-image-frame rounded-4 overflow-hidden shadow-lg border border-secondary border-opacity-10">
+                <div className="hero-image-frame rounded-4 overflow-hidden shadow-lg border border-secondary border-opacity-10" style={{ height: 380, background: '#070a12' }}>
                   <img
-                    src="/images/mallakhamb_action.png"
+                    src="/images/hero_banner.jpg"
                     alt="Mallakhamb athlete performing pose on pole"
-                    className="w-100 img-fluid"
-                    style={{ maxHeight: 360, objectFit: 'cover' }}
+                    className="w-100 h-100"
+                    style={{ objectFit: 'cover', objectPosition: 'center 35%' }}
+                    onError={(e) => {
+                      e.target.onerror = null;
+                      e.target.src = '/images/mallakhamb_action.png';
+                    }}
                   />
                 </div>
               </motion.div>
@@ -120,12 +124,16 @@ const Home = () => {
             </Col>
             <Col lg={6}>
               <SlideRight>
-                <div className="rounded-4 overflow-hidden border border-secondary border-opacity-10 shadow-lg">
+                <div className="rounded-4 overflow-hidden border border-secondary border-opacity-10 shadow-lg" style={{ height: 340, background: '#070a12' }}>
                   <img
-                    src="/images/mallakhamb_pole.png"
+                    src="/images/heritage_banner.jpg"
                     alt="Mallakhamb History"
-                    className="w-100 img-fluid"
-                    style={{ maxHeight: 280, objectFit: 'cover' }}
+                    className="w-100 h-100"
+                    style={{ objectFit: 'cover', objectPosition: 'center 45%' }}
+                    onError={(e) => {
+                      e.target.onerror = null;
+                      e.target.src = '/images/mallakhamb_pole.png';
+                    }}
                   />
                 </div>
               </SlideRight>
